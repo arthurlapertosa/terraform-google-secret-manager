@@ -23,6 +23,12 @@ resource "google_pubsub_topic" "secret" {
   name    = "topic-${random_id.random_topic_id_suffix.hex}"
 }
 
+resource "google_pubsub_subscription" "secret_subscription" {
+  name    = "subscription-${random_id.random_topic_id_suffix.hex}"
+  topic   = google_pubsub_topic.secret.name
+  project = var.project_id
+}
+
 resource "google_project_service_identity" "secretmanager_identity" {
   provider = google-beta
   project  = var.project_id
@@ -61,17 +67,6 @@ module "secret-manager" {
   ]
 }
 
-resource "google_pubsub_subscription" "secret_subscription" {
-  name    = "subscription-${random_id.random_topic_id_suffix.hex}"
-  topic   = google_pubsub_topic.secret.name
-  project = var.project_id
-
-  filter = "attributes.eventType = \"SECRET_VERSION_DESTROY\""
-  expiration_policy {
-    ttl = ""
-  }
-}
-
 resource "google_monitoring_notification_channel" "email_channel" {
   project      = var.project_id
   display_name = "Secret deletion alert channel"
@@ -87,23 +82,15 @@ resource "google_monitoring_alert_policy" "alert_policy" {
   project      = var.project_id
   display_name = "Secret Deletion Alert"
   documentation {
-    content = "Secret manager alert: one or more secret versions from ${join(" ", module.secret-manager.secret_names)} was deleted."
+    content = "Secret manager alert! $${metric.display_name} from $${resource.project} there was a change on one of your secrets from ${join(" ", module.secret-manager.secret_names)}"
   }
   combiner = "OR"
   conditions {
     display_name = "Condition 1"
     condition_threshold {
       comparison = "COMPARISON_GT"
-      duration   = "0s"
-      filter     = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${google_pubsub_subscription.secret_subscription.name}\" AND metric.type = \"pubsub.googleapis.com/subscription/num_undelivered_messages\""
-      aggregations {
-        alignment_period = "300s"
-        cross_series_reducer =  "REDUCE_NONE"
-        per_series_aligner = "ALIGN_PERCENT_CHANGE"
-      }
-      trigger {
-        count = 1
-      }
+      duration   = "300s"
+      filter     = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${google_pubsub_subscription.secret_subscription.id}\" AND metric.type = \"pubsub.googleapis.com/subscription/num_undelivered_messages\""
     }
   }
 
@@ -119,6 +106,4 @@ resource "google_monitoring_alert_policy" "alert_policy" {
   user_labels = {
     severity = "warning"
   }
-
-  severity = "WARNING"
 }
