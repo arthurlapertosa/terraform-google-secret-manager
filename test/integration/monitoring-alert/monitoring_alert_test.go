@@ -17,6 +17,7 @@ package monitoring_alert
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/GoogleCloudPlatform/cloud-foundation-toolkit/infra/blueprint-test/pkg/tft"
 	"github.com/GoogleCloudPlatform/cloud-foundation-toolkit/infra/blueprint-test/pkg/utils"
 	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/gjson"
 )
 
 var tests = []struct {
@@ -32,19 +34,28 @@ var tests = []struct {
 	email_addresses     []string
 	monitor_all_secrets bool
 	run_destroy_check   bool
+	path                string
 }{
-	{"Monitor only created secret", []string{"email@example.com"}, false, true},
-	{"Monitor all secrets", []string{"email@example.com", "email2@example.com"}, true, false},
+	{"Monitor only created secret", []string{"email@example.com"}, false, false, "a.tfstate"},
+	{"Monitor all secrets", []string{"email@example.com", "email2@example.com"}, true, false, "b.tfstate"},
 }
 
 func TestMonitoringAlertSecret(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.test_name, func(t *testing.T) {
+			t.Parallel()
+
+			path, _ := os.Getwd()
+			backendConfig := map[string]interface{}{
+				"path": fmt.Sprintf("%s/../../../examples/monitoring-alert/%s", path, tt.path),
+			}
 			vars := map[string]interface{}{
 				"email_addresses":     tt.email_addresses,
 				"monitor_all_secrets": tt.monitor_all_secrets,
 			}
-			secretT := tft.NewTFBlueprintTest(t, tft.WithVars(vars))
+			secretT := tft.NewTFBlueprintTest(t,
+				tft.WithVars(vars),
+				tft.WithBackendConfig(backendConfig))
 
 			secretT.DefineVerify(func(assert *assert.Assertions) {
 				secretT.DefaultVerify(assert)
@@ -70,17 +81,23 @@ func TestMonitoringAlertSecret(t *testing.T) {
 				}
 				assert.ElementsMatch(tt.email_addresses, notificationChannelEmailAddresses)
 
-				monitoringAlerts := gcloud.Runf(t, "alpha monitoring policies list --project %s", projectId).Array()
-				assert.Len(monitoringAlerts, 1)
-				monitoringAlert := monitoringAlerts[0]
-				alertCondition := monitoringAlerts[0].Get("conditions").Array()
-				assert.Len(alertCondition, 1)
 				var expectedFilter string
 				if tt.monitor_all_secrets {
 					expectedFilter = "protoPayload.methodName=\"google.cloud.secretmanager.v1.SecretManagerService.DestroySecretVersion\""
 				} else {
 					expectedFilter = fmt.Sprintf("protoPayload.methodName=\"google.cloud.secretmanager.v1.SecretManagerService.DestroySecretVersion\" AND protoPayload.resourceName : \"%s\"", secretT.GetStringOutput("secret_name"))
 				}
+				monitoringAlerts := gcloud.Runf(t, "alpha monitoring policies list --project %s", projectId).Array()
+				var monitoringAlert gjson.Result
+				for _, monitoringAlertLoop := range monitoringAlerts {
+					conditions := monitoringAlertLoop.Get("conditions").Array()
+					if len(conditions) > 0 && conditions[0].Get("conditionMatchedLog.filter").String() == expectedFilter {
+						monitoringAlert = monitoringAlertLoop
+						break
+					}
+				}
+				alertCondition := monitoringAlert.Get("conditions").Array()
+				assert.Len(alertCondition, 1)
 				assert.Equal(expectedFilter, alertCondition[0].Get("conditionMatchedLog.filter").String())
 				notificationChannels := monitoringAlert.Get("notificationChannels").Array()
 				assert.Len(notificationChannels, len(tt.email_addresses))

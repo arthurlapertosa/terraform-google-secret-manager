@@ -21,8 +21,8 @@ resource "random_string" "secret-suffix" {
 }
 
 module "secret-manager" {
-  source  = "GoogleCloudPlatform/secret-manager/google//modules/simple-secret"
-  version = "~> 0.4"
+  source = "../../modules/simple-secret"
+  # version = "~> 0.4"
 
   project_id  = var.project_id
   name        = "secret-${random_string.secret-suffix.result}"
