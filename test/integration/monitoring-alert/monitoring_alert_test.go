@@ -17,7 +17,6 @@ package monitoring_alert
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -36,27 +35,28 @@ var tests = []struct {
 	run_destroy_check   bool
 	path                string
 }{
-	{"Monitor only created secret", []string{"email@example.com"}, false, false, "a.tfstate"},
-	{"Monitor all secrets", []string{"email@example.com", "email2@example.com"}, true, false, "b.tfstate"},
+	{
+		"Monitor only created secret",
+		[]string{"email@example.com"},
+		false,
+		true,
+		"../../fixtures/monitoring-alert",
+	},
+	{
+		"Monitor all secrets",
+		[]string{"email@example.com", "email2@example.com"},
+		true,
+		false,
+		"../../fixtures/monitoring-alert-monitor-all-secrets",
+	},
 }
 
 func TestMonitoringAlertSecret(t *testing.T) {
-	for _, tt := range tests {
-		t.Run(tt.test_name, func(t *testing.T) {
+	for _, testInputs := range tests {
+		t.Run(testInputs.test_name, func(t *testing.T) {
 			t.Parallel()
 
-			path, _ := os.Getwd()
-			backendConfig := map[string]interface{}{
-				"path": fmt.Sprintf("%s/../../../examples/monitoring-alert/%s", path, tt.path),
-			}
-			vars := map[string]interface{}{
-				"email_addresses":     tt.email_addresses,
-				"monitor_all_secrets": tt.monitor_all_secrets,
-			}
-			secretT := tft.NewTFBlueprintTest(t,
-				tft.WithVars(vars),
-				tft.WithBackendConfig(backendConfig))
-
+			secretT := tft.NewTFBlueprintTest(t, tft.WithTFDir(testInputs.path))
 			secretT.DefineVerify(func(assert *assert.Assertions) {
 				secretT.DefaultVerify(assert)
 
@@ -70,7 +70,7 @@ func TestMonitoringAlertSecret(t *testing.T) {
 				assert.Equal(fmt.Sprintf("projects/%s/secrets/%s", projectNumber, outputSecretName), secretName, "has expected name")
 
 				notificationChannelNames := secretT.GetJsonOutput("notification_channel_names").Array()
-				assert.Len(notificationChannelNames, len(tt.email_addresses))
+				assert.Len(notificationChannelNames, len(testInputs.email_addresses))
 				notificationChannelEmailAddresses := []string{}
 				notificationChannelStringNames := []string{}
 				for _, notificationChannelName := range notificationChannelNames {
@@ -79,10 +79,10 @@ func TestMonitoringAlertSecret(t *testing.T) {
 					assert.Len(monitoringChannel, 1)
 					notificationChannelEmailAddresses = append(notificationChannelEmailAddresses, monitoringChannel[0].Get("labels.email_address").String())
 				}
-				assert.ElementsMatch(tt.email_addresses, notificationChannelEmailAddresses)
+				assert.ElementsMatch(testInputs.email_addresses, notificationChannelEmailAddresses)
 
 				var expectedFilter string
-				if tt.monitor_all_secrets {
+				if testInputs.monitor_all_secrets {
 					expectedFilter = "protoPayload.methodName=\"google.cloud.secretmanager.v1.SecretManagerService.DestroySecretVersion\""
 				} else {
 					expectedFilter = fmt.Sprintf("protoPayload.methodName=\"google.cloud.secretmanager.v1.SecretManagerService.DestroySecretVersion\" AND protoPayload.resourceName : \"%s\"", secretT.GetStringOutput("secret_name"))
@@ -100,7 +100,7 @@ func TestMonitoringAlertSecret(t *testing.T) {
 				assert.Len(alertCondition, 1)
 				assert.Equal(expectedFilter, alertCondition[0].Get("conditionMatchedLog.filter").String())
 				notificationChannels := monitoringAlert.Get("notificationChannels").Array()
-				assert.Len(notificationChannels, len(tt.email_addresses))
+				assert.Len(notificationChannels, len(testInputs.email_addresses))
 				for _, notificationChannel := range notificationChannels {
 					assert.Contains(notificationChannelStringNames, notificationChannel.String())
 				}
@@ -108,7 +108,7 @@ func TestMonitoringAlertSecret(t *testing.T) {
 				assert.Equal("300s", monitoringAlert.Get("alertStrategy.notificationRateLimit.period").String())
 				assert.True(monitoringAlert.Get("enabled").Bool())
 
-				if tt.run_destroy_check {
+				if testInputs.run_destroy_check {
 					time.Sleep(5 * time.Minute)
 					gcloud.Runf(t, "secrets versions destroy %s/versions/1 -q", secretName)
 					utils.Poll(t, func() (bool, error) {
