@@ -35,7 +35,7 @@ func TestMonitoringAlertSecret(t *testing.T) {
 
 	secretT := tft.NewTFBlueprintTest(t, tft.WithVars(vars))
 
-	projectId := secretT.GetTFOptions().EnvVars["TF_VAR_project_id"]
+	projectId := secretT.GetTFSetupStringOutput("project_id")
 	projectNumber := gcloud.Runf(t, "projects describe %s", projectId).Get("projectNumber").String()
 	gcloud.Runf(t, "iam service-accounts enable %s-compute@developer.gserviceaccount.com --project=%s", projectNumber, projectId)
 
